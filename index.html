@@ -1,0 +1,290 @@
+<html>
+  <head>
+    <title>Eraser</title>
+    <style>
+      .highlight {
+        background-color: yellow;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>NOSTR Event Eraser</h1>
+    <p>You will interact with this script through dialog prompts. Once you submit the event id, it will take several minutes to search all known relays. Please wait till you receive the next prompt.</p>
+    <input id="action-start" type="submit" value="start">
+    <h2>References</h2>
+    <ul>
+      <li><a href="https://github.com/nostr-protocol/nips/blob/master/09.md">NIP-19: bech32-encoded entities</a></li>
+    </ul>
+  </body>
+  <script type="importmap">
+    { "imports": {
+      "nostr-tools": "https://esm.sh/nostr-tools",
+      "nostr-tools/pure": "https://esm.sh/nostr-tools/pure",
+      "nostr-tools/nip19": "https://esm.sh/nostr-tools/nip19",
+      "nostr-tools/relay": "https://esm.sh/nostr-tools/relay",
+      "buffer": "https://esm.sh/buffer",
+      "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.5.0/secp256k1",
+      "@noble/hashes/utils": "https://esm.sh/@noble/hashes@1.5.0/utils"
+    } }
+  </script>
+  <script type="module">
+
+    import * as nip19 from 'nostr-tools/nip19'
+    import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+    import { Relay } from 'nostr-tools/relay'
+    import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
+
+    function clearSelection() {
+      document.getElementById('action-start').style.display = 'inline'
+    }
+
+    function noteDecode(bech32) {
+      try {
+        const decoded = nip19.decode(bech32)
+        if (decoded?.type == 'note') {
+          return decoded.data
+        }
+      } catch(e) {
+      }
+    }
+
+    function nsecDecode(bech32) {
+      try {
+        const decoded = nip19.decode(bech32)
+        if (decoded?.type == 'nsec') {
+          return bytesToHex(decoded.data)
+        }
+      } catch(e) {
+      }
+    }
+
+    function signEvent(hsec, event) {
+      return finalizeEvent(event, hexToBytes(hsec))
+    }
+
+    function validKey(hex) {
+      return hex?.length === 64 && hex?.toLowerCase().split('').reduce((a, c) => a && '0123456789abcdef'.includes(c), true)
+    }
+
+    function npub(hpub) {
+      return nip19.npubEncode(hpub)
+    }
+
+    function nsec(hsec) {
+      return nip19.nsecEncode(hsec)
+    }
+
+    function relayUrl(input) {
+      if (input.includes('.')) {
+        if (input.includes('://')) {
+          return input
+        } else {
+          return `wss://${input}`
+        }
+      }
+    }
+
+    function publishEvent(event, relay) {
+      return new Promise((resolve, reject) => {
+        Relay.connect(relayUrl(relay)).then(relay => {
+          relay.subscribe([
+            {
+              ids: [event.id],
+            },
+          ], {
+            onevent(event) {
+              resolve()
+            },
+            oneose() {
+              reject()
+            }
+          })
+          relay.publish(event).then(() => {
+            relay.close()
+          })
+        }).catch(() => {
+          reject()
+        })
+      })
+    }
+
+    let connections = 0
+    function findEvent(id, url) {
+      return new Promise((resolve, reject) => {
+        const operator = () => {
+          if (connections > 10) {
+            setTimeout(operator, 100)
+            return
+          }
+          //console.log('connecting to', relay)
+          connections++
+          let foundEvent
+          Relay.connect(relayUrl(url)).then(relay => {
+            const sub = relay.subscribe([
+              {
+                ids: [id],
+              },
+            ], {
+              onevent(event) {
+                foundEvent = event
+              },
+              oneose() {
+                connections--
+                try {
+                  relay.close()
+                } catch (e) {
+                }
+                if (foundEvent) {
+                  resolve({ ...foundEvent, _foundOnRelay: url })
+                } else {
+                  reject()
+                }
+              }
+            })
+          }).catch(() => {
+            connections--
+            reject()
+          })  
+        }
+        operator()
+      })
+    }
+
+    function nostrWatchRelays() {
+      return new Promise((resolve, reject) => {
+        fetch(`https://api.nostr.watch/v1/online`).then(resp => resp.json()).then(json => {
+          resolve(json)
+        }, rejectReason => {
+          console.log(rejectReason)
+          resolve([])
+        })
+      })
+    }
+
+    addEventListener('DOMContentLoaded', event => {
+      document.getElementById('action-start').addEventListener('click', clickEvent => {
+        clickEvent.target.style.display = 'none'
+        let entry = prompt(`Event id:`)
+        if (!entry) {
+          clearSelection()
+          return
+        }
+
+        let id = (noteDecode(entry) || entry)?.toLowerCase()
+        if (!validKey(id)) {
+          if (id?.trim()) alert(`Invalid event id`)
+          clearSelection()
+          return
+        }
+
+        let allRelays = []
+        let foundOnRelays = []
+        nostrWatchRelays().then(onlineRelays => {
+          allRelays.push(...onlineRelays)
+        }).then(() => {
+          let hits = 0
+          let pubkeys = [], kinds = []
+          let checksInProgress = []
+          const queryRelayForNote = relay => {
+            checksInProgress.push(findEvent(id, relay))
+          }
+          const waitForResults = () => {
+            console.log('waitForResults', checksInProgress.length)
+            Promise.allSettled(checksInProgress).then(results => {
+              console.log('settled', results.length)
+              hits += results.reduce((a, c) => {
+                if (c.status == 'fulfilled') {
+                  foundOnRelays.push(c.value?._foundOnRelay)
+                }
+                let pk = c.value?.pubkey
+                if (pk && !pubkeys.includes(pk)) {
+                  pubkeys.push(pk)
+                }
+                let kind = c.value?.kind
+                if (kind && !kinds.includes(kind)) {
+                  kinds.push(kind)
+                }
+                return c.status == 'fulfilled'? a + 1 : a
+              }, 0)
+              checksInProgress = []
+              let input = prompt(`${
+                pubkeys.length > 0?
+                  `Found ${pubkeys.length !== 1? `${pubkeys.length} ` : ``}event${pubkeys.length == 1? ``: `s`}`
+                :
+                  `Not found`
+              } on ${hits?`${hits} of `:``}${allRelays.length} relays.${
+                kinds.length > 0 && pubkeys.length > 0 ? ` Kind ${
+                  kinds.join(', ')
+                } owned by ${
+                  pubkeys.map(hpub => {
+                    let np = npub(hpub)
+                    return `${np.substring(0,9)}···${np.substring(np.length-4)} (hex ${hpub.substring(0,4)}···${hpub.substring(hpub.length-4)})`
+                  }).join(', ')
+                }.` : ``
+              } Enter ${
+                allRelays.length > 0 ? `additional relay(s) or continue` : `relay(s)`
+              }:`)
+              if (input === null) {
+                clearSelection()
+              } else if (!input) {
+                finish()
+              } else {
+                input.split(',').map(element => {
+                  let relay = relayUrl(element.trim())
+                  if (!relay) {
+                    // alert(`Invalid relay name or url`)
+                  } else if (allRelays.includes(relay)) {
+                    // alert(`Relay was already checked`)
+                  } else {
+                    allRelays.push(relay)
+                    queryRelayForNote(relay)
+                  }
+                })
+                waitForResults()
+              }
+            })
+          }
+          allRelays.map(queryRelayForNote)
+          waitForResults()
+          const finish = () => {
+            let busy = false
+            let reason = prompt(`Reason for deletion:`)
+            if (reason !== null) {
+              const secret = prompt(`Secret key (nsec) of event owner (to sign deletion event):`)
+              if (secret) {
+                let hsec = nsecDecode(secret) || secret
+                if (!validKey(hsec)) {
+                  alert('Invalid key')
+                } else {
+                  const deletionEvent = signEvent(hsec, {
+                    kind: 5,
+                    created_at: Math.floor(Date.now() / 1000),
+                    tags: [
+                      ['e', `${id}`],
+                      ...kinds.map(kind => ['k', `${kind}`])
+                    ],
+                    content: `${reason}`,
+                  })
+                  console.log(foundOnRelays)
+                  console.log(JSON.stringify(deletionEvent))
+
+                  if (confirm(`Publish deletion event to ${foundOnRelays.length} relay(s)?`)) {
+                    busy = true
+                    Promise.allSettled(foundOnRelays.map(relay => publishEvent(deletionEvent, relay))).then(results => {
+                      const sent = results.reduce((a, c) => c.status == 'fulfilled'? a+1: a, 0)
+                      alert(`Sent successfully to ${sent} of ${results.length} relays.`)
+                      clearSelection()
+                    })
+                  }
+                }
+              }
+            }
+            if (!busy) {
+              clearSelection()
+            }
+          }
+        })
+      })
+    })
+  </script>
+</html>
