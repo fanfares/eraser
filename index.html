@@ -1,5 +1,6 @@
 <html>
   <head>
+    <meta charset="UTF-8">
     <title>Eraser</title>
     <style>
       .highlight {
@@ -215,7 +216,7 @@
               checksInProgress = []
               let input = prompt(`${
                 pubkeys.length > 0?
-                  `Found ${pubkeys.length !== 1? `${pubkeys.length} ` : ``}event${pubkeys.length == 1? ``: `s`}`
+                  `Found ${pubkeys.length !== 1? `${pubkeys.length} ` : ``}event${pubkeys.length !== 1? `s`: ``}`
                 :
                   `Not found`
               } on ${hits?`${hits} of `:``}${allRelays.length} relays.${
@@ -274,6 +275,8 @@
                 let hsec = nsecDecode(secret) || secret
                 if (!validKey(hsec)) {
                   alert('Invalid key')
+                } else if (!pubkeys.includes(getPublicKey(hexToBytes(hsec)))) {
+                  alert('This key doesn't correspond to the original event')
                 } else {
                   const deletionEvent = signEvent(hsec, {
                     kind: 5,
