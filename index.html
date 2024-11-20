@@ -276,7 +276,7 @@
                 if (!validKey(hsec)) {
                   alert('Invalid key')
                 } else if (!pubkeys.includes(getPublicKey(hexToBytes(hsec)))) {
-                  alert('This key doesn't correspond to the original event')
+                  alert(`This key doesn’t correspond to the original event`)
                 } else {
                   const deletionEvent = signEvent(hsec, {
                     kind: 5,
