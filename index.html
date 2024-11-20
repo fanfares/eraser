@@ -180,8 +180,6 @@
         let allRelays = []
         let foundOnRelays = []
         nostrWatchRelays().then(onlineRelays => {
-          allRelays.push(...onlineRelays)
-        }).then(() => {
           let hits = 0
           let pubkeys = [], kinds = []
           let checksInProgress = []
@@ -223,7 +221,7 @@
                 }.` : ``
               } Enter ${
                 allRelays.length > 0 ? `additional relay(s) or continue` : `relay(s)`
-              }:`)
+              }:`, allRelays.length == 0? 'all': '')
               if (input === null) {
                 clearSelection()
               } else if (!input) {
@@ -231,7 +229,20 @@
               } else {
                 input.split(',').map(element => {
                   let relay = relayUrl(element.trim())
-                  if (!relay) {
+                  if (element == 'all') {
+                    onlineRelays.map(r => {
+                      let relay = relayUrl(r)
+                      if (!relay) {
+                        // alert(`Invalid relay name or url`)
+                      } else if (allRelays.includes(relay)) {
+                        // alert(`Relay was already checked`)
+                      } else {
+                        allRelays.push(relay)
+                        queryRelayForNote(relay)
+                      }
+                    })
+                  }
+                  else if (!relay) {
                     // alert(`Invalid relay name or url`)
                   } else if (allRelays.includes(relay)) {
                     // alert(`Relay was already checked`)
