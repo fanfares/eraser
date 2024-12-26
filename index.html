@@ -186,7 +186,7 @@
           return
         }
 
-        let allRelays = []
+        let allRelays = ['relay.fanfares.io']
         let foundOnRelays = []
         nostrWatchRelays().then(onlineRelays => {
           let hits = 0
@@ -270,7 +270,12 @@
             let busy = false
             let reason = prompt(`Reason for deletion:`)
             if (reason !== null) {
-              const secret = prompt(`Secret key (nsec) of event owner (to sign deletion event):`)
+              const secret = prompt(`Secret key (nsec) of event owner ${
+                pubkeys.map(hpub => {
+                  let np = npub(hpub)
+                  return `${np.substring(0,9)}···${np.substring(np.length-4)} (hex ${hpub.substring(0,4)}···${hpub.substring(hpub.length-4)})`
+                }).join(', ')
+              } to sign deletion event:`)
               if (secret) {
                 let hsec = nsecDecode(secret) || secret
                 if (!validKey(hsec)) {
